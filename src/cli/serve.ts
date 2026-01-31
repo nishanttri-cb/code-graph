@@ -200,6 +200,91 @@ async function startMcpServer(): Promise<void> {
             required: ['file_path'],
           },
         },
+        {
+          name: 'get_source_code',
+          description:
+            'Retrieve actual source code for a symbol, not just metadata. Use this when you need to see the implementation of a function, class, or method.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_path: {
+                type: 'string',
+                description: 'Absolute path to the project root',
+              },
+              symbol_name: {
+                type: 'string',
+                description: 'Name of the symbol to retrieve source code for',
+              },
+              node_id: {
+                type: 'string',
+                description: 'Direct lookup by node ID (alternative to symbol_name)',
+              },
+              context_lines: {
+                type: 'number',
+                description: 'Number of lines to include before and after the symbol (default: 0)',
+              },
+            },
+            required: ['project_path'],
+          },
+        },
+        {
+          name: 'get_usage_examples',
+          description:
+            'Find examples of how a symbol is used throughout the codebase. Returns code snippets showing actual usage patterns.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_path: {
+                type: 'string',
+                description: 'Absolute path to the project root',
+              },
+              symbol_name: {
+                type: 'string',
+                description: 'Name of the symbol to find usages for',
+              },
+              max_examples: {
+                type: 'number',
+                description: 'Maximum number of examples to return (default: 5)',
+              },
+              context_lines: {
+                type: 'number',
+                description: 'Lines of context around each usage (default: 2)',
+              },
+            },
+            required: ['project_path', 'symbol_name'],
+          },
+        },
+        {
+          name: 'get_editing_context',
+          description:
+            'Gather relevant context for editing a file, optimized for LLM token limits. Returns the file content, imports with their source, dependents, and related types.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              project_path: {
+                type: 'string',
+                description: 'Absolute path to the project root',
+              },
+              file_path: {
+                type: 'string',
+                description: 'Path to the file you want to edit (relative to project root)',
+              },
+              task: {
+                type: 'string',
+                description: 'Optional: Description of what you are trying to do. Helps find similar functions as examples.',
+              },
+              max_tokens: {
+                type: 'number',
+                description: 'Maximum tokens for context (default: 8000, ~32KB)',
+              },
+              include_tests: {
+                type: 'boolean',
+                description: 'Whether to include test files in dependents (default: false)',
+              },
+            },
+            required: ['project_path', 'file_path'],
+          },
+        },
       ],
     };
   });
@@ -425,6 +510,121 @@ async function startMcpServer(): Promise<void> {
                   null,
                   2
                 ),
+              },
+            ],
+          };
+        }
+
+        case 'get_source_code': {
+          const db = getDb(projectPath);
+          const typedArgs = args as {
+            symbol_name?: string;
+            node_id?: string;
+            context_lines?: number;
+          };
+
+          if (!typedArgs.symbol_name && !typedArgs.node_id) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    error: 'Either symbol_name or node_id is required',
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+
+          const result = db.getSourceCode({
+            symbolName: typedArgs.symbol_name,
+            nodeId: typedArgs.node_id,
+            contextLines: typedArgs.context_lines,
+          });
+
+          if (!result) {
+            // Try to find similar symbols for helpful error
+            const suggestions = typedArgs.symbol_name
+              ? db.searchNodes(typedArgs.symbol_name).slice(0, 5)
+              : [];
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      error: 'Symbol not found',
+                      suggestions: suggestions.map((n) => ({
+                        name: n.name,
+                        type: n.type,
+                        file: n.filePath,
+                      })),
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'get_usage_examples': {
+          const db = getDb(projectPath);
+          const typedArgs = args as {
+            symbol_name: string;
+            max_examples?: number;
+            context_lines?: number;
+          };
+
+          const result = db.getUsageExamples({
+            symbolName: typedArgs.symbol_name,
+            maxExamples: typedArgs.max_examples,
+            contextLines: typedArgs.context_lines,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'get_editing_context': {
+          const db = getDb(projectPath);
+          const typedArgs = args as {
+            file_path: string;
+            task?: string;
+            max_tokens?: number;
+            include_tests?: boolean;
+          };
+
+          const result = db.getEditingContext({
+            filePath: typedArgs.file_path,
+            task: typedArgs.task,
+            maxTokens: typedArgs.max_tokens,
+            includeTests: typedArgs.include_tests,
+          });
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2),
               },
             ],
           };

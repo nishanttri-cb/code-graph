@@ -2,6 +2,15 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import type { GraphNode, GraphEdge, FileHash, ProjectConfig } from '../types.js';
+import {
+  readSourceLines,
+  readFileContent,
+} from '../utils/source-reader.js';
+import {
+  estimateTokens,
+  fitWithinLimit,
+  truncateToTokenLimit,
+} from '../utils/token-estimator.js';
 
 export class GraphDatabase {
   private db: Database.Database;
@@ -466,6 +475,451 @@ export class GraphDatabase {
       targetId: row.target_id as string,
       type: row.type as GraphEdge['type'],
       metadata: JSON.parse((row.metadata as string) || '{}'),
+    };
+  }
+
+  // === NEW METHODS FOR SOURCE CODE RETRIEVAL ===
+
+  /**
+   * Get source code for a symbol by name or node ID
+   */
+  getSourceCode(options: {
+    symbolName?: string;
+    nodeId?: string;
+    contextLines?: number;
+  }): {
+    symbol: string;
+    type: string;
+    file_path: string;
+    line_start: number;
+    line_end: number;
+    language: string;
+    code: string;
+    context_before?: string;
+    context_after?: string;
+    stale_warning?: string;
+  } | null {
+    let node: GraphNode | null = null;
+
+    if (options.nodeId) {
+      node = this.getNode(options.nodeId);
+    } else if (options.symbolName) {
+      const nodes = this.searchNodes(options.symbolName);
+      // Find exact match first, then fallback to first partial match
+      node = nodes.find((n) => n.name === options.symbolName) || nodes[0] || null;
+    }
+
+    if (!node) {
+      return null;
+    }
+
+    const fullPath = path.join(this.projectRoot, node.filePath);
+    const contextLines = options.contextLines || 0;
+
+    const result = readSourceLines(
+      fullPath,
+      node.lineStart,
+      node.lineEnd,
+      contextLines,
+      contextLines
+    );
+
+    return {
+      symbol: node.name,
+      type: node.type,
+      file_path: node.filePath,
+      line_start: node.lineStart,
+      line_end: node.lineEnd,
+      language: node.language,
+      code: result.code,
+      context_before: result.contextBefore,
+      context_after: result.contextAfter,
+      stale_warning: result.staleWarning,
+    };
+  }
+
+  /**
+   * Get usage examples of a symbol throughout the codebase
+   */
+  getUsageExamples(options: {
+    symbolName: string;
+    maxExamples?: number;
+    contextLines?: number;
+  }): {
+    symbol: string;
+    total_usages: number;
+    examples: Array<{
+      file_path: string;
+      line: number;
+      containing_function: string;
+      snippet: string;
+      usage_type: string;
+    }>;
+  } {
+    const maxExamples = options.maxExamples || 5;
+    const contextLines = options.contextLines || 2;
+
+    // Find the symbol node(s)
+    const symbolNodes = this.searchNodes(options.symbolName);
+    const targetNode = symbolNodes.find((n) => n.name === options.symbolName) || symbolNodes[0];
+
+    if (!targetNode) {
+      return {
+        symbol: options.symbolName,
+        total_usages: 0,
+        examples: [],
+      };
+    }
+
+    // Find edges where this symbol is the target (i.e., something uses/calls it)
+    const edges = this.getEdgesTo(targetNode.id);
+
+    // Also check for edges where target_id contains the symbol name (unresolved refs)
+    const unresolvedEdges = this.db
+      .prepare(
+        "SELECT * FROM edges WHERE target_id LIKE ? AND type IN ('calls', 'uses', 'imports')"
+      )
+      .all(`%${options.symbolName}%`) as Record<string, unknown>[];
+
+    const allEdges = [
+      ...edges,
+      ...unresolvedEdges.map((row) => this.rowToEdge(row)),
+    ];
+
+    // Deduplicate by source_id
+    const uniqueEdges = Array.from(
+      new Map(allEdges.map((e) => [e.sourceId, e])).values()
+    );
+
+    const examples: Array<{
+      file_path: string;
+      line: number;
+      containing_function: string;
+      snippet: string;
+      usage_type: string;
+    }> = [];
+
+    for (const edge of uniqueEdges.slice(0, maxExamples)) {
+      const sourceNode = this.getNode(edge.sourceId);
+      if (!sourceNode) continue;
+
+      // Get the line where the usage occurs (from edge metadata or source node start)
+      const usageLine =
+        (edge.metadata?.line as number) || sourceNode.lineStart;
+
+      const fullPath = path.join(this.projectRoot, sourceNode.filePath);
+      const result = readSourceLines(
+        fullPath,
+        usageLine,
+        usageLine,
+        contextLines,
+        contextLines
+      );
+
+      if (result.code || result.contextBefore || result.contextAfter) {
+        const snippetParts = [
+          result.contextBefore,
+          result.code,
+          result.contextAfter,
+        ].filter(Boolean);
+
+        examples.push({
+          file_path: sourceNode.filePath,
+          line: usageLine,
+          containing_function: sourceNode.name,
+          snippet: snippetParts.join('\n'),
+          usage_type: edge.type,
+        });
+      }
+    }
+
+    return {
+      symbol: options.symbolName,
+      total_usages: uniqueEdges.length,
+      examples,
+    };
+  }
+
+  /**
+   * Get relevant context for editing a file, optimized for LLM token limits
+   */
+  getEditingContext(options: {
+    filePath: string;
+    task?: string;
+    maxTokens?: number;
+    includeTests?: boolean;
+  }): {
+    target_file: {
+      path: string;
+      content: string;
+      language: string;
+    };
+    imports: Array<{
+      module: string;
+      symbols: string[];
+      relevant_code?: string;
+    }>;
+    dependents: Array<{
+      path: string;
+      usage_context: string;
+    }>;
+    related_types: Array<{
+      name: string;
+      file_path: string;
+      code: string;
+    }>;
+    similar_functions?: Array<{
+      name: string;
+      file_path: string;
+      code: string;
+    }>;
+    token_estimate: number;
+  } {
+    const maxTokens = options.maxTokens || 8000;
+    const includeTests = options.includeTests || false;
+    let remainingTokens = maxTokens;
+
+    // 1. Read target file
+    const fullPath = path.join(this.projectRoot, options.filePath);
+    const targetFileResult = readFileContent(fullPath);
+
+    // Detect language from file extension
+    const ext = path.extname(options.filePath).toLowerCase();
+    const languageMap: Record<string, string> = {
+      '.ts': 'typescript',
+      '.tsx': 'typescript',
+      '.js': 'javascript',
+      '.jsx': 'javascript',
+      '.py': 'python',
+      '.java': 'java',
+    };
+    const language = languageMap[ext] || 'unknown';
+
+    // Truncate target file if needed (reserve ~60% for target file)
+    const targetTokenBudget = Math.floor(maxTokens * 0.6);
+    const truncatedTarget = truncateToTokenLimit(
+      targetFileResult.content,
+      targetTokenBudget
+    );
+    remainingTokens -= estimateTokens(truncatedTarget.text);
+
+    // 2. Get file context (nodes and edges)
+    const fileContext = this.getFileContext(options.filePath);
+
+    // 3. Get imports and their source code
+    const imports: Array<{
+      module: string;
+      symbols: string[];
+      relevant_code?: string;
+    }> = [];
+
+    const importNodes = fileContext.nodes.filter((n) => n.type === 'import');
+    const importBudget = Math.floor(remainingTokens * 0.3);
+    let importTokensUsed = 0;
+
+    for (const importNode of importNodes) {
+      const importMetadata = importNode.metadata as {
+        source?: string;
+        imported?: string[];
+      };
+      const module = importMetadata.source || importNode.name;
+      const symbols = importMetadata.imported || [importNode.name];
+
+      // Try to find the source of imported symbols
+      let relevantCode: string | undefined;
+
+      for (const symbol of symbols.slice(0, 3)) {
+        // Limit symbols to check
+        const symbolNodes = this.searchNodes(symbol);
+        const matchingNode = symbolNodes.find(
+          (n) =>
+            n.name === symbol &&
+            n.filePath !== options.filePath &&
+            (n.type === 'function' ||
+              n.type === 'class' ||
+              n.type === 'interface')
+        );
+
+        if (matchingNode && importTokensUsed < importBudget) {
+          const sourceResult = this.getSourceCode({
+            nodeId: matchingNode.id,
+          });
+          if (sourceResult) {
+            const codeTokens = estimateTokens(sourceResult.code);
+            if (importTokensUsed + codeTokens < importBudget) {
+              relevantCode = relevantCode
+                ? relevantCode + '\n\n' + sourceResult.code
+                : sourceResult.code;
+              importTokensUsed += codeTokens;
+            }
+          }
+        }
+      }
+
+      imports.push({
+        module,
+        symbols,
+        relevant_code: relevantCode,
+      });
+    }
+    remainingTokens -= importTokensUsed;
+
+    // 4. Get dependents (files that import this file)
+    const dependents: Array<{
+      path: string;
+      usage_context: string;
+    }> = [];
+
+    const dependentBudget = Math.floor(remainingTokens * 0.3);
+    let dependentTokensUsed = 0;
+
+    for (const edge of fileContext.incomingEdges) {
+      if (dependentTokensUsed >= dependentBudget) break;
+
+      const sourceNode = this.getNode(edge.sourceId);
+      if (!sourceNode) continue;
+
+      // Skip test files unless requested
+      if (
+        !includeTests &&
+        (sourceNode.filePath.includes('.test.') ||
+          sourceNode.filePath.includes('.spec.') ||
+          sourceNode.filePath.includes('__tests__'))
+      ) {
+        continue;
+      }
+
+      // Get a snippet showing how this file is used
+      const usageLine = (edge.metadata?.line as number) || sourceNode.lineStart;
+      const fullSourcePath = path.join(this.projectRoot, sourceNode.filePath);
+      const snippetResult = readSourceLines(fullSourcePath, usageLine, usageLine, 2, 2);
+
+      const usageContext = [
+        snippetResult.contextBefore,
+        snippetResult.code,
+        snippetResult.contextAfter,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const contextTokens = estimateTokens(usageContext);
+      if (dependentTokensUsed + contextTokens < dependentBudget) {
+        dependents.push({
+          path: sourceNode.filePath,
+          usage_context: usageContext,
+        });
+        dependentTokensUsed += contextTokens;
+      }
+    }
+    remainingTokens -= dependentTokensUsed;
+
+    // 5. Find related types (interfaces, classes used in the file)
+    const relatedTypes: Array<{
+      name: string;
+      file_path: string;
+      code: string;
+    }> = [];
+
+    const typeBudget = Math.floor(remainingTokens * 0.5);
+    let typeTokensUsed = 0;
+
+    // Look for type references in outgoing edges
+    for (const edge of fileContext.outgoingEdges) {
+      if (typeTokensUsed >= typeBudget) break;
+
+      if (
+        edge.type === 'uses' ||
+        edge.type === 'extends' ||
+        edge.type === 'implements'
+      ) {
+        const targetNode = this.getNode(edge.targetId);
+        if (
+          targetNode &&
+          (targetNode.type === 'interface' || targetNode.type === 'class') &&
+          targetNode.filePath !== options.filePath
+        ) {
+          const sourceResult = this.getSourceCode({ nodeId: targetNode.id });
+          if (sourceResult) {
+            const codeTokens = estimateTokens(sourceResult.code);
+            if (typeTokensUsed + codeTokens < typeBudget) {
+              relatedTypes.push({
+                name: targetNode.name,
+                file_path: targetNode.filePath,
+                code: sourceResult.code,
+              });
+              typeTokensUsed += codeTokens;
+            }
+          }
+        }
+      }
+    }
+    remainingTokens -= typeTokensUsed;
+
+    // 6. Find similar functions if task is provided
+    let similarFunctions:
+      | Array<{
+          name: string;
+          file_path: string;
+          code: string;
+        }>
+      | undefined;
+
+    if (options.task && remainingTokens > 500) {
+      similarFunctions = [];
+      const similarBudget = remainingTokens;
+      let similarTokensUsed = 0;
+
+      // Extract keywords from task
+      const taskWords = options.task
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((w) => w.length > 3);
+
+      // Search for functions matching task keywords
+      for (const word of taskWords.slice(0, 3)) {
+        if (similarTokensUsed >= similarBudget) break;
+
+        const matchingNodes = this.searchNodes(word);
+        for (const node of matchingNodes.slice(0, 2)) {
+          if (
+            (node.type === 'function' || node.type === 'method') &&
+            node.filePath !== options.filePath
+          ) {
+            const sourceResult = this.getSourceCode({ nodeId: node.id });
+            if (sourceResult) {
+              const codeTokens = estimateTokens(sourceResult.code);
+              if (similarTokensUsed + codeTokens < similarBudget) {
+                similarFunctions.push({
+                  name: node.name,
+                  file_path: node.filePath,
+                  code: sourceResult.code,
+                });
+                similarTokensUsed += codeTokens;
+              }
+            }
+          }
+        }
+      }
+
+      if (similarFunctions.length === 0) {
+        similarFunctions = undefined;
+      }
+    }
+
+    // Calculate final token estimate
+    const totalTokens = maxTokens - remainingTokens;
+
+    return {
+      target_file: {
+        path: options.filePath,
+        content: truncatedTarget.text,
+        language,
+      },
+      imports,
+      dependents,
+      related_types: relatedTypes,
+      similar_functions: similarFunctions,
+      token_estimate: totalTokens,
     };
   }
 

@@ -115,6 +115,9 @@ Add to `~/.claude/claude_desktop_config.json`:
 | `get_by_type` | Get all nodes of a type (e.g., all controllers) |
 | `get_graph_stats` | Get graph statistics |
 | `get_impact_analysis` | Analyze what's affected by changing a file |
+| `get_source_code` | Retrieve actual source code for a symbol |
+| `get_usage_examples` | Find examples of how a symbol is used |
+| `get_editing_context` | Get smart context for editing a file (optimized for LLM token limits) |
 
 ### Making Claude Use code-graph Automatically
 
@@ -125,7 +128,10 @@ Claude won't proactively use code-graph tools unless instructed. Add a section t
 
 This project has code-graph initialized. Use these MCP tools when working on this codebase:
 
-- `get_file_context` - Before editing any file, check its dependencies
+- `get_editing_context` - Before editing any file, get smart context including imports and dependents
+- `get_source_code` - To see the actual implementation of a function or class
+- `get_usage_examples` - To find examples of how a symbol is used in the codebase
+- `get_file_context` - To check a file's dependencies and symbols
 - `get_impact_analysis` - Before refactoring, check what might break
 - `search_symbols` - To find where functions/classes are defined
 - `get_call_graph` - To understand function call relationships
@@ -230,6 +236,31 @@ Claude uses `get_impact_analysis` and `find_references` to identify:
 Ask Claude: "What REST endpoints does this app have?"
 
 Claude uses `get_by_type endpoint` and returns all endpoints with their HTTP methods and paths.
+
+### Getting Source Code
+
+Ask Claude: "Show me the implementation of the validateUser function"
+
+Claude uses `get_source_code` with `symbol_name: "validateUser"` and returns the actual source code with file location.
+
+### Finding Usage Examples
+
+Ask Claude: "How is the parseComponent function used in this codebase?"
+
+Claude uses `get_usage_examples` and returns code snippets showing:
+- Which functions call `parseComponent`
+- The context around each usage
+- The type of usage (call, import, reference)
+
+### Smart Context for Editing
+
+Ask Claude: "I need to modify the UserService, what context do I need?"
+
+Claude uses `get_editing_context` with `file_path: "src/services/UserService.ts"` and receives:
+- Full file content (within token limits)
+- Source code of imported symbols
+- Files that depend on UserService with usage snippets
+- Related types/interfaces used in the file
 
 ## Development
 
