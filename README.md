@@ -158,6 +158,70 @@ your-project/
     └── settings.json    # Claude Code hooks (optional)
 ```
 
+## Tracking MCP Context (Logging)
+
+To see what context is being sent to the LLM via MCP tools, enable logging:
+
+### Enable Logging
+
+Update your Claude Desktop config (`~/.claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "code-graph": {
+      "command": "code-graph",
+      "args": ["serve", "--mcp"],
+      "env": {
+        "CODE_GRAPH_LOG": "true",
+        "CODE_GRAPH_LOG_CONSOLE": "true"
+      }
+    }
+  }
+}
+```
+
+### View Logs
+
+```bash
+# List all log files
+code-graph logs list
+
+# Summary of today's usage
+code-graph logs summary
+
+# Show recent entries
+code-graph logs tail
+code-graph logs tail --tail 20
+
+# Summary for specific date
+code-graph logs summary --date 2025-01-15
+
+# Get log file path (for external tools)
+code-graph logs path
+
+# Clear all logs
+code-graph logs clear
+```
+
+### Log Output Example
+
+```
+MCP Log Summary for 2025-01-31
+========================================
+Total Requests: 12
+Total Tokens (est): 45,230
+Errors: 0
+
+By Tool:
+----------------------------------------
+  get_editing_context: 3 calls, ~32,100 tokens, avg 145ms
+  get_source_code: 5 calls, ~8,500 tokens, avg 23ms
+  search_symbols: 4 calls, ~4,630 tokens, avg 12ms
+```
+
+Logs are stored in `~/.code-graph/logs/mcp-YYYY-MM-DD.jsonl` as newline-delimited JSON.
+
 ## Configuration
 
 Edit `.code-graph/config.json`:

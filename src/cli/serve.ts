@@ -7,6 +7,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { GraphDatabase } from '../db/schema.js';
+import { McpLogger } from '../utils/mcp-logger.js';
 
 export async function serveCommand(options: { mcp?: boolean }): Promise<void> {
   if (options.mcp) {
@@ -289,9 +290,34 @@ async function startMcpServer(): Promise<void> {
     };
   });
 
+  // Initialize logger (enabled via CODE_GRAPH_LOG=true environment variable)
+  const logger = new McpLogger();
+  if (logger.isEnabled()) {
+    console.error(`[code-graph] MCP logging enabled. Log file: ${logger.getLogPath()}`);
+  }
+
+  // Helper to create and log a successful response
+  const createResponse = (
+    toolName: string,
+    data: unknown,
+    startTime: number
+  ) => {
+    const result = {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(data, null, 2),
+        },
+      ],
+    };
+    logger.logResponse(toolName, result, startTime);
+    return result;
+  };
+
   // Handle tool calls
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const { startTime } = logger.logRequest(name, args as Record<string, unknown>);
 
     try {
       const projectPath = (args as Record<string, string>)?.project_path;
@@ -302,34 +328,23 @@ async function startMcpServer(): Promise<void> {
           const filePath = (args as { file_path: string }).file_path;
           const context = db.getFileContext(filePath);
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    file: filePath,
-                    symbols: context.nodes.map((n) => ({
-                      type: n.type,
-                      name: n.name,
-                      line: `${n.lineStart}-${n.lineEnd}`,
-                      metadata: n.metadata,
-                    })),
-                    incoming_dependencies: context.incomingEdges.map((e) => ({
-                      from: e.sourceId,
-                      type: e.type,
-                    })),
-                    outgoing_dependencies: context.outgoingEdges.map((e) => ({
-                      to: e.targetId,
-                      type: e.type,
-                    })),
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return createResponse(name, {
+            file: filePath,
+            symbols: context.nodes.map((n) => ({
+              type: n.type,
+              name: n.name,
+              line: `${n.lineStart}-${n.lineEnd}`,
+              metadata: n.metadata,
+            })),
+            incoming_dependencies: context.incomingEdges.map((e) => ({
+              from: e.sourceId,
+              type: e.type,
+            })),
+            outgoing_dependencies: context.outgoingEdges.map((e) => ({
+              to: e.targetId,
+              type: e.type,
+            })),
+          }, startTime);
         }
 
         case 'search_symbols': {
@@ -337,24 +352,13 @@ async function startMcpServer(): Promise<void> {
           const query = (args as { query: string }).query;
           const results = db.searchNodes(query);
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  results.map((n) => ({
-                    type: n.type,
-                    name: n.name,
-                    file: n.filePath,
-                    line: n.lineStart,
-                    language: n.language,
-                  })),
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return createResponse(name, results.map((n) => ({
+            type: n.type,
+            name: n.name,
+            file: n.filePath,
+            line: n.lineStart,
+            language: n.language,
+          })), startTime);
         }
 
         case 'find_references': {
@@ -362,29 +366,18 @@ async function startMcpServer(): Promise<void> {
           const symbol = (args as { symbol: string }).symbol;
           const refs = db.findReferences(symbol);
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  refs.map((r) => ({
-                    definition: {
-                      type: r.node.type,
-                      name: r.node.name,
-                      file: r.node.filePath,
-                      line: r.node.lineStart,
-                    },
-                    usages: r.edges.map((e) => ({
-                      type: e.type,
-                      target: e.targetId,
-                    })),
-                  })),
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return createResponse(name, refs.map((r) => ({
+            definition: {
+              type: r.node.type,
+              name: r.node.name,
+              file: r.node.filePath,
+              line: r.node.lineStart,
+            },
+            usages: r.edges.map((e) => ({
+              type: e.type,
+              target: e.targetId,
+            })),
+          })), startTime);
         }
 
         case 'get_call_graph': {
@@ -393,46 +386,28 @@ async function startMcpServer(): Promise<void> {
           const nodes = db.searchNodes(funcName);
 
           if (nodes.length === 0) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({ error: 'Function not found' }),
-                },
-              ],
-            };
+            return createResponse(name, { error: 'Function not found' }, startTime);
           }
 
           const callGraph = db.getCallGraph(nodes[0].id);
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    function: funcName,
-                    location: {
-                      file: nodes[0].filePath,
-                      line: nodes[0].lineStart,
-                    },
-                    callers: callGraph.callers.map((n) => ({
-                      name: n.name,
-                      file: n.filePath,
-                      line: n.lineStart,
-                    })),
-                    callees: callGraph.callees.map((n) => ({
-                      name: n.name,
-                      file: n.filePath,
-                      line: n.lineStart,
-                    })),
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return createResponse(name, {
+            function: funcName,
+            location: {
+              file: nodes[0].filePath,
+              line: nodes[0].lineStart,
+            },
+            callers: callGraph.callers.map((n) => ({
+              name: n.name,
+              file: n.filePath,
+              line: n.lineStart,
+            })),
+            callees: callGraph.callees.map((n) => ({
+              name: n.name,
+              file: n.filePath,
+              line: n.lineStart,
+            })),
+          }, startTime);
         }
 
         case 'get_by_type': {
@@ -440,37 +415,19 @@ async function startMcpServer(): Promise<void> {
           const nodeType = (args as { node_type: string }).node_type;
           const nodes = db.getNodesByType(nodeType);
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  nodes.map((n) => ({
-                    name: n.name,
-                    file: n.filePath,
-                    line: n.lineStart,
-                    metadata: n.metadata,
-                  })),
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return createResponse(name, nodes.map((n) => ({
+            name: n.name,
+            file: n.filePath,
+            line: n.lineStart,
+            metadata: n.metadata,
+          })), startTime);
         }
 
         case 'get_graph_stats': {
           const db = getDb(projectPath);
           const stats = db.getStats();
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(stats, null, 2),
-              },
-            ],
-          };
+          return createResponse(name, stats, startTime);
         }
 
         case 'get_impact_analysis': {
@@ -488,31 +445,20 @@ async function startMcpServer(): Promise<void> {
             }
           }
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    file: filePath,
-                    exports: context.nodes
-                      .filter((n) => n.metadata.isExported)
-                      .map((n) => n.name),
-                    dependent_files: Array.from(dependentFiles),
-                    incoming_references: context.incomingEdges.length,
-                    risk_level:
-                      dependentFiles.size > 10
-                        ? 'high'
-                        : dependentFiles.size > 3
-                          ? 'medium'
-                          : 'low',
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return createResponse(name, {
+            file: filePath,
+            exports: context.nodes
+              .filter((n) => n.metadata.isExported)
+              .map((n) => n.name),
+            dependent_files: Array.from(dependentFiles),
+            incoming_references: context.incomingEdges.length,
+            risk_level:
+              dependentFiles.size > 10
+                ? 'high'
+                : dependentFiles.size > 3
+                  ? 'medium'
+                  : 'low',
+          }, startTime);
         }
 
         case 'get_source_code': {
@@ -549,35 +495,17 @@ async function startMcpServer(): Promise<void> {
               ? db.searchNodes(typedArgs.symbol_name).slice(0, 5)
               : [];
 
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      error: 'Symbol not found',
-                      suggestions: suggestions.map((n) => ({
-                        name: n.name,
-                        type: n.type,
-                        file: n.filePath,
-                      })),
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            };
+            return createResponse(name, {
+              error: 'Symbol not found',
+              suggestions: suggestions.map((n) => ({
+                name: n.name,
+                type: n.type,
+                file: n.filePath,
+              })),
+            }, startTime);
           }
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return createResponse(name, result, startTime);
         }
 
         case 'get_usage_examples': {
@@ -594,14 +522,7 @@ async function startMcpServer(): Promise<void> {
             contextLines: typedArgs.context_lines,
           });
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return createResponse(name, result, startTime);
         }
 
         case 'get_editing_context': {
@@ -620,39 +541,36 @@ async function startMcpServer(): Promise<void> {
             includeTests: typedArgs.include_tests,
           });
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
+          return createResponse(name, result, startTime);
         }
 
-        default:
-          return {
+        default: {
+          const errorResult = {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: JSON.stringify({ error: `Unknown tool: ${name}` }),
               },
             ],
             isError: true,
           };
+          logger.logResponse(name, errorResult, startTime, `Unknown tool: ${name}`);
+          return errorResult;
+        }
       }
     } catch (error) {
-      return {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorResult = {
         content: [
           {
-            type: 'text',
-            text: JSON.stringify({
-              error: error instanceof Error ? error.message : String(error),
-            }),
+            type: 'text' as const,
+            text: JSON.stringify({ error: errorMessage }),
           },
         ],
         isError: true,
       };
+      logger.logResponse(name, errorResult, startTime, errorMessage);
+      return errorResult;
     }
   });
 

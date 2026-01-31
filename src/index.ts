@@ -8,6 +8,7 @@ import { queryCommand } from './cli/query.js';
 import { serveCommand } from './cli/serve.js';
 import { watchCommand } from './watcher/index.js';
 import { resolveCommand } from './cli/resolve.js';
+import { logsCommand } from './cli/logs.js';
 
 const program = new Command();
 
@@ -69,5 +70,13 @@ program
   .action(async () => {
     await queryCommand('stats', [], { json: false });
   });
+
+program
+  .command('logs [action]')
+  .description('View MCP server logs (actions: list, summary, tail, clear, path)')
+  .option('--date <date>', 'Date in YYYY-MM-DD format')
+  .option('--tail <n>', 'Number of recent entries to show')
+  .option('--json', 'Output as JSON')
+  .action(logsCommand);
 
 program.parse();
