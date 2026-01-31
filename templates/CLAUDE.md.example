@@ -1,0 +1,68 @@
+# CLAUDE.md - Code Graph Integration
+
+Copy the section below into your project's CLAUDE.md file and update the project path.
+
+---
+
+## Code Graph
+
+This project has [code-graph](https://github.com/nishanttri-cb/code-graph) initialized for codebase analysis.
+
+### Available MCP Tools
+
+Use these tools proactively when working on this codebase:
+
+| Tool | When to Use |
+|------|-------------|
+| `get_file_context` | **Before editing any file** - understand its dependencies, imports, and what depends on it |
+| `get_impact_analysis` | **Before refactoring** - see what files would be affected by changes |
+| `search_symbols` | **Finding definitions** - locate where functions, classes, or methods are defined |
+| `get_call_graph` | **Understanding flow** - see what calls a function and what it calls |
+| `find_references` | **Finding usages** - see everywhere a symbol is used |
+| `get_by_type` | **Discovery** - find all controllers, services, endpoints, etc. |
+| `get_graph_stats` | **Overview** - get statistics about the codebase structure |
+
+### When to Use Code Graph
+
+1. **Before editing a file**: Always call `get_file_context` first to understand:
+   - What the file exports
+   - What it imports/depends on
+   - What other files depend on it
+
+2. **Before making breaking changes**: Call `get_impact_analysis` to identify:
+   - Files that would be affected
+   - Risk level of the change
+
+3. **When searching for code**: Use `search_symbols` instead of grep for:
+   - Finding function definitions
+   - Locating class implementations
+   - Finding method signatures
+
+4. **When understanding architecture**: Use `get_by_type` to discover:
+   - All REST endpoints (`endpoint`)
+   - All services (`service`)
+   - All controllers (`controller`)
+   - All classes (`class`)
+
+### Project Configuration
+
+**Project path**: `/absolute/path/to/your/project`
+
+Replace the path above with your actual project path. This is required when calling code-graph tools.
+
+### Example Usage
+
+When asked to modify `UserService.ts`:
+
+1. First call `get_file_context` with `file_path: "src/services/UserService.ts"`
+2. Review dependencies and dependents
+3. If making breaking changes, call `get_impact_analysis`
+4. Then proceed with the modification
+
+### Keeping the Graph Updated
+
+The code graph updates automatically via git hooks. If you notice stale data, run:
+
+```bash
+code-graph sync
+```

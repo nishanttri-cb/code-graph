@@ -122,7 +122,55 @@ Claude now has access to these tools:
 - "What files would be affected if I change the database schema?"
 - "Find all functions that call validateInput"
 
-## Step 8: Add to .gitignore
+## Step 8: Configure CLAUDE.md (Recommended)
+
+Claude won't automatically use code-graph tools unless you ask for something relevant or explicitly request it. To make Claude use code-graph proactively, add instructions to your project's `CLAUDE.md` file.
+
+Create or update `CLAUDE.md` in your project root:
+
+```markdown
+## Code Graph
+
+This project has code-graph initialized. The graph contains the codebase structure,
+dependencies, and call relationships.
+
+### When to use code-graph tools
+
+Use these MCP tools proactively when working on this codebase:
+
+- **Before editing a file**: Use `get_file_context` to understand its dependencies,
+  imports, and what depends on it
+- **Before refactoring**: Use `get_impact_analysis` to see what files would be affected
+- **When searching for code**: Use `search_symbols` to find function/class definitions
+- **When understanding call flow**: Use `get_call_graph` to see callers and callees
+
+### Available tools
+
+| Tool | When to use |
+|------|-------------|
+| `get_file_context` | Before editing any file |
+| `search_symbols` | Finding where something is defined |
+| `get_call_graph` | Understanding function relationships |
+| `get_impact_analysis` | Before making breaking changes |
+| `get_by_type` | Finding all controllers, services, etc. |
+| `find_references` | Finding all usages of a symbol |
+| `get_graph_stats` | Overview of codebase structure |
+
+### Project path
+
+When calling code-graph tools, use this project path:
+`/absolute/path/to/your/project`
+```
+
+Replace `/absolute/path/to/your/project` with your actual project path.
+
+### Why This Helps
+
+- Claude reads `CLAUDE.md` at the start of each session
+- The instructions guide Claude to use code-graph tools at appropriate times
+- You get better context-aware assistance without having to ask explicitly
+
+## Step 9: Add to .gitignore
 
 Add to your project's `.gitignore`:
 
@@ -131,7 +179,9 @@ Add to your project's `.gitignore`:
 .code-graph/graph.db
 ```
 
-Optionally commit `.code-graph/config.json` to share settings with your team.
+Commit these files to share with your team:
+- `.code-graph/config.json` - Project configuration
+- `CLAUDE.md` - Instructions for Claude (if you added code-graph section)
 
 ## Troubleshooting
 

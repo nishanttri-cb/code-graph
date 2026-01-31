@@ -116,6 +116,25 @@ Add to `~/.claude/claude_desktop_config.json`:
 | `get_graph_stats` | Get graph statistics |
 | `get_impact_analysis` | Analyze what's affected by changing a file |
 
+### Making Claude Use code-graph Automatically
+
+Claude won't proactively use code-graph tools unless instructed. Add a section to your project's `CLAUDE.md` to guide Claude:
+
+```markdown
+## Code Graph
+
+This project has code-graph initialized. Use these MCP tools when working on this codebase:
+
+- `get_file_context` - Before editing any file, check its dependencies
+- `get_impact_analysis` - Before refactoring, check what might break
+- `search_symbols` - To find where functions/classes are defined
+- `get_call_graph` - To understand function call relationships
+
+Project path: /absolute/path/to/your/project
+```
+
+See [templates/CLAUDE.md.example](templates/CLAUDE.md.example) for a complete template.
+
 ## Project Structure
 
 After initialization, your project will have:
