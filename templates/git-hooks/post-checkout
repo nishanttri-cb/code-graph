@@ -1,0 +1,6 @@
+#!/bin/bash
+# code-graph: Sync graph after checkout
+
+if command -v code-graph &> /dev/null; then
+  code-graph sync --quiet &
+fi

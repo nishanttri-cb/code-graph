@@ -1,0 +1,9 @@
+#!/bin/bash
+# code-graph: Update graph after commit
+
+if command -v code-graph &> /dev/null; then
+  changed_files=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+  if [ -n "$changed_files" ]; then
+    code-graph update --files "$changed_files" &
+  fi
+fi

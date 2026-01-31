@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local code-graph database (for this project's own development)
+.code-graph/graph.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Temporary files
+*.tmp
+*.temp
+test-mcp-simple.js

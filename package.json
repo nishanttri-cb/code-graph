@@ -1,0 +1,45 @@
+{
+  "name": "code-graph",
+  "version": "1.0.0",
+  "description": "Local code graph builder with MCP integration for AI-assisted development",
+  "main": "dist/index.js",
+  "bin": {
+    "code-graph": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "start": "node dist/index.js",
+    "lint": "eslint src --ext .ts",
+    "clean": "rm -rf dist",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "code-analysis",
+    "graph",
+    "mcp",
+    "claude",
+    "static-analysis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.0.0",
+    "chokidar": "^3.6.0",
+    "commander": "^12.0.0",
+    "glob": "^10.3.0",
+    "java-parser": "^2.3.0",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-python": "^0.21.0",
+    "ts-morph": "^22.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
