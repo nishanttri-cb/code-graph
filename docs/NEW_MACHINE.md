@@ -13,7 +13,7 @@ This guide covers how to install and configure code-graph on a new machine.
 ### Option A: Clone from GitHub
 
 ```bash
-git clone https://github.com/aspect-apps/code-graph.git
+git clone https://github.com/nishanttri-cb/code-graph.git
 cd code-graph
 ```
 
